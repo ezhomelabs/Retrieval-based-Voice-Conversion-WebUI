@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
+"""
+The code reads a raw PCM file (s16, 16kHz by default) as stream and processes it using the RVC model.
+The processed audio is written to a new raw PCM file (s16, 16kHz by default) as stream.
 
-'''
-The code reads a raw PCM file (s16, 16kHz) as stream and processes it using the RVC model.
-The processed audio is written to a new raw PCM file (s16, 16kHz) as stream.
-
-shell command:
-python realtime_inference.py --input input.pcm --output output.pcm --pth_path model.pth --index_path model.index --pitch 0 --formant 0.0 --f0method fcpe
-'''
+Shell command example:
+python realtime_inference.py --input input.pcm --output output.pcm --pth_path model.pth --index_path model.index \
+    --pitch 0 --formant 0.0 --f0method fcpe --block_time 0.25 --crossfade_time 0.05 --extra_time 2.5 \
+    --I_noise_reduce --O_noise_reduce --use_pv --rms_mix_rate 0.0 --index_rate 0.0 --n_cpu 4 --sr_type sr_model
+"""
 
 import os
 import sys
@@ -30,13 +31,13 @@ if sys.platform == "darwin":
 from dotenv import load_dotenv
 load_dotenv()
 
-# Import custom modules (make sure these are in your PYTHONPATH)
+# Import custom modules (ensure these are in your PYTHONPATH)
 from infer.lib import rtrvc as rvc_for_realtime
 from configs.config import Config
 from tools.torchgate import TorchGate
 
 # =============================================================================
-# Utility: Phase Vocoder (used for SOLA blending, if desired)
+# Utility: Phase Vocoder (used for SOLA blending if desired)
 # =============================================================================
 def phase_vocoder(a, b, fade_out, fade_in):
     window = torch.sqrt(fade_out * fade_in)
@@ -91,10 +92,11 @@ class Harvest(multiprocessing.Process):
 # =============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="RVC-based PCM converter (raw PCM: s16, 16kHz)."
+        description="RVC-based PCM converter (raw PCM: s16, 16kHz by default)."
     )
-    parser.add_argument("--input", required=True, help="Path to input PCM file (s16, 16kHz)")
-    parser.add_argument("--output", required=True, help="Path to output PCM file (s16, 16kHz)")
+    # File I/O and model parameters
+    parser.add_argument("--input", required=True, help="Path to input PCM file (s16, 16kHz by default)")
+    parser.add_argument("--output", required=True, help="Path to output PCM file (s16, 16kHz by default)")
     parser.add_argument("--pth_path", required=True, help="Path to the .pth model file")
     parser.add_argument("--index_path", required=True, help="Path to the .index file")
     parser.add_argument("--pitch", type=int, default=0, help="Pitch adjustment (default: 0)")
@@ -105,13 +107,27 @@ def main():
         default="fcpe",
         help="f0 extraction method (default: fcpe)",
     )
+    # Audio processing parameters
+    parser.add_argument("--sr_type", choices=["sr_model", "sr_device"], default="sr_model",
+                        help="Sample rate type (default: sr_model)")
+    parser.add_argument("--block_time", type=float, default=0.25, help="Block time in seconds (default: 0.25)")
+    parser.add_argument("--threhold", type=int, default=-60, help="Response threshold in dB (default: -60)")
+    parser.add_argument("--crossfade_time", type=float, default=0.05, help="Crossfade time in seconds (default: 0.05)")
+    parser.add_argument("--extra_time", type=float, default=2.5, help="Extra inference time in seconds (default: 2.5)")
+    parser.add_argument("--I_noise_reduce", action="store_true", help="Enable input noise reduction")
+    parser.add_argument("--O_noise_reduce", action="store_true", help="Enable output noise reduction")
+    parser.add_argument("--use_pv", action="store_true", help="Enable phase vocoder for blending")
+    parser.add_argument("--rms_mix_rate", type=float, default=0.0, help="RMS mixing rate (default: 0.0)")
+    parser.add_argument("--index_rate", type=float, default=0.0, help="Index rate (default: 0.0)")
+    parser.add_argument("--n_cpu", type=int, default=min(cpu_count(), 4), help="Number of CPUs for inference (default: min(cpu_count(), 4))")
+    # Optional: allow changing the sample rate if needed
+    parser.add_argument("--samplerate", type=int, default=16000, help="Input sample rate (default: 16000)")
     args = parser.parse_args()
 
-    # Setup multiprocessing for f0 extraction if needed
+    # Setup multiprocessing for f0 extraction using the provided CPU count
     inp_q = Queue()
     opt_q = Queue()
-    n_cpu = min(cpu_count(), 8)
-    for _ in range(n_cpu):
+    for _ in range(args.n_cpu):
         p = Harvest(inp_q, opt_q)
         p.daemon = True
         p.start()
@@ -123,8 +139,8 @@ def main():
         args.formant,
         args.pth_path,
         args.index_path,
-        0.0,   # index_rate (adjust as needed)
-        4,     # n_cpu for inference (adjust if needed)
+        args.index_rate,
+        args.n_cpu,
         inp_q,
         opt_q,
         config,
@@ -134,17 +150,17 @@ def main():
     # -------------------------------------------------------------------------
     # PCM file stream processing parameters
     # -------------------------------------------------------------------------
-    # Since input is already 16kHz, we set samplerate to 16000.
-    samplerate = 16000
+    # Use the provided sample rate (default 16000)
+    samplerate = args.samplerate
     channels = 1  # assuming mono input
-    zc = samplerate // 100  # typically 160
-    block_time = 0.25       # seconds per block
-    crossfade_time = 0.05   # seconds for SOLA blending
-    extra_time = 2.5        # extra inference time (seconds)
+    zc = samplerate // 100  # e.g., 160 for 16000 Hz
+
+    block_time = args.block_time       # seconds per block
+    crossfade_time = args.crossfade_time # seconds for SOLA blending
+    extra_time = args.extra_time        # extra inference time (seconds)
 
     block_frame = int(round(block_time * samplerate / zc)) * zc
-    # For 16kHz input, block_frame_16k equals block_frame
-    block_frame_16k = block_frame
+    block_frame_16k = block_frame  # For 16kHz input, these are the same
     crossfade_frame = int(round(crossfade_time * samplerate / zc)) * zc
     sola_buffer_frame = min(crossfade_frame, 4 * zc)
     sola_search_frame = zc
@@ -161,7 +177,9 @@ def main():
         dtype=torch.float32,
     )
     input_wav_res = torch.zeros(
-        block_frame, device=device, dtype=torch.float32
+        block_frame,
+        device=device,
+        dtype=torch.float32,
     )
 
     # Fade windows for SOLA crossfade
@@ -172,11 +190,16 @@ def main():
     )
     fade_out_window = 1 - fade_in_window
 
-    # Buffer for SOLA blending
+    # Buffer for SOLA blending and output noise reduction
     sola_buffer = torch.zeros(sola_buffer_frame, device=device, dtype=torch.float32)
     output_buffer = input_wav.clone()
 
-    # TorchGate for output noise reduction (if required)
+    # If input noise reduction is enabled, prepare additional buffers
+    if args.I_noise_reduce:
+        input_wav_denoise = input_wav.clone()
+        nr_buffer = torch.zeros(sola_buffer_frame, device=device, dtype=torch.float32)
+
+    # TorchGate for noise reduction
     tg = TorchGate(sr=samplerate, n_fft=4 * zc, prop_decrease=0.9).to(device)
 
     # -------------------------------------------------------------------------
@@ -184,9 +207,7 @@ def main():
     # -------------------------------------------------------------------------
     fin = open(args.input, "rb")
     fout = open(args.output, "wb")
-
-    # For s16 PCM, there are 2 bytes per sample.
-    bytes_per_sample = 2
+    bytes_per_sample = 2  # For s16 PCM (2 bytes per sample)
     block_size_bytes = block_frame * channels * bytes_per_sample
 
     print("Starting PCM processing...")
@@ -200,13 +221,41 @@ def main():
         # Convert raw int16 PCM data to float32 in range [-1.0, 1.0]
         audio_block = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
 
+        # ---------------------------------------------------------------------
+        # Apply threshold-based noise gating (if enabled)
+        # This splits the block into frames of length 'zc' and mutes frames below the threshold.
+        # ---------------------------------------------------------------------
+        if args.threhold > -60:
+            num_frames = len(audio_block) // zc
+            for i in range(num_frames):
+                start_idx = i * zc
+                end_idx = (i + 1) * zc
+                frame = audio_block[start_idx:end_idx]
+                rms = np.sqrt(np.mean(frame ** 2))
+                db = 20 * np.log10(rms) if rms > 0 else -100
+                if db < args.threhold:
+                    audio_block[start_idx:end_idx] = 0
+
         # Update the ring buffer with new audio data
         input_wav[:-block_frame] = input_wav[block_frame:].clone()
         input_wav[-block_frame:] = torch.from_numpy(audio_block).to(device)
 
-        # For 16kHz input, simply copy the new block from input_wav into input_wav_res
-        input_wav_res[:-block_frame_16k] = input_wav_res[block_frame_16k:].clone()
-        input_wav_res[-block_frame_16k:] = input_wav[-block_frame:]
+        # Update input_wav_res with or without noise reduction
+        if args.I_noise_reduce:
+            input_wav_denoise[:-block_frame] = input_wav_denoise[block_frame:].clone()
+            # Select a segment for denoising: last (sola_buffer_frame + block_frame) samples
+            segment = input_wav[-(sola_buffer_frame + block_frame):]
+            denoised_segment = tg(segment.unsqueeze(0), input_wav.unsqueeze(0)).squeeze(0)
+            # Blend the beginning of the segment with previous noise reduction buffer
+            denoised_segment[:sola_buffer_frame] *= fade_in_window
+            denoised_segment[:sola_buffer_frame] += nr_buffer * fade_out_window
+            input_wav_denoise[-block_frame:] = denoised_segment[:block_frame]
+            nr_buffer[:] = denoised_segment[block_frame:]
+            input_wav_res[:-block_frame_16k] = input_wav_res[block_frame_16k:].clone()
+            input_wav_res[-block_frame_16k:] = input_wav_denoise[-block_frame:]
+        else:
+            input_wav_res[:-block_frame_16k] = input_wav_res[block_frame_16k:].clone()
+            input_wav_res[-block_frame_16k:] = input_wav[-block_frame:]
 
         # ---------------------------------------------------------------------
         # Inference using the RVC model
@@ -214,15 +263,41 @@ def main():
         infer_wav = rvc.infer(
             input_wav_res, block_frame_16k, skip_head, return_length, args.f0method
         )
-        # If the target sample rate differs from 16kHz, resample the output.
+        # If the target sample rate differs, perform resampling (typically not needed for 16kHz)
         if rvc.tgt_sr != samplerate:
             resampler2 = tat.Resample(orig_freq=rvc.tgt_sr, new_freq=samplerate, dtype=torch.float32).to(device)
             infer_wav = resampler2(infer_wav)
         else:
             resampler2 = None
 
-        # (Optional) You can add output noise reduction or volume envelope mixing here.
-        # For instance, applying TorchGate (tg) to infer_wav if needed.
+        # Volume envelope mixing if rms_mix_rate < 1
+        if args.rms_mix_rate < 1:
+            if args.I_noise_reduce:
+                base_wav = input_wav_denoise[extra_frame:]
+            else:
+                base_wav = input_wav[extra_frame:]
+            rms1 = librosa.feature.rms(
+                y=base_wav[:infer_wav.shape[0]].cpu().numpy(),
+                frame_length=4 * zc,
+                hop_length=zc
+            )
+            rms1 = torch.from_numpy(rms1).to(device)
+            rms1 = F.interpolate(rms1.unsqueeze(0), size=infer_wav.shape[0] + 1, mode="linear", align_corners=True)[0, 0, :-1]
+            rms2 = librosa.feature.rms(
+                y=infer_wav.cpu().numpy(),
+                frame_length=4 * zc,
+                hop_length=zc
+            )
+            rms2 = torch.from_numpy(rms2).to(device)
+            rms2 = F.interpolate(rms2.unsqueeze(0), size=infer_wav.shape[0] + 1, mode="linear", align_corners=True)[0, 0, :-1]
+            rms2 = torch.max(rms2, torch.ones_like(rms2) * 1e-3)
+            infer_wav *= torch.pow(rms1 / rms2, torch.tensor(1 - args.rms_mix_rate, device=device))
+
+        # Output noise reduction if enabled
+        if args.O_noise_reduce:
+            output_buffer[:-block_frame] = output_buffer[block_frame:].clone()
+            output_buffer[-block_frame:] = infer_wav[-block_frame:]
+            infer_wav = tg(infer_wav.unsqueeze(0), output_buffer.unsqueeze(0)).squeeze(0)
 
         # ---------------------------------------------------------------------
         # SOLA algorithm for smoothing block transitions
@@ -240,13 +315,13 @@ def main():
         print(f"sola_offset = {sola_offset}")
 
         infer_wav = infer_wav[sola_offset:]
-        # Use a simple crossfade blend; alternatively, uncomment the phase vocoder version.
-        infer_wav[:sola_buffer_frame] = (
-            infer_wav[:sola_buffer_frame] * fade_in_window
-            + sola_buffer * fade_out_window
-        )
-        # Update the SOLA buffer for the next iteration
-        sola_buffer = infer_wav[block_frame : block_frame + sola_buffer_frame].clone()
+        # Use phase vocoder blending if enabled, otherwise use simple crossfade
+        if args.use_pv:
+            infer_wav[:sola_buffer_frame] = phase_vocoder(sola_buffer, infer_wav[:sola_buffer_frame], fade_out_window, fade_in_window)
+        else:
+            infer_wav[:sola_buffer_frame] = infer_wav[:sola_buffer_frame] * fade_in_window + sola_buffer * fade_out_window
+        # Update SOLA buffer for next iteration
+        sola_buffer = infer_wav[block_frame:block_frame + sola_buffer_frame].clone()
 
         # The final output block is the first block_frame samples of the processed waveform.
         out_block = infer_wav[:block_frame]
@@ -259,7 +334,6 @@ def main():
     fout.close()
     elapsed = time.perf_counter() - start_time
     print(f"Processing complete. Elapsed time: {elapsed:.2f} seconds.")
-
 
 if __name__ == "__main__":
     main()
