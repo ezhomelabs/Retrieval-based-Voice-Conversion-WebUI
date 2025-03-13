@@ -231,6 +231,7 @@ def preprocess_dataset(trainset_dir, exp_dir, sr, n_p):
         config.preprocess_per,
     )
     logger.info("Execute: " + cmd)
+    print("Execute: " + cmd)
     # , stdin=PIPE, stdout=PIPE,stderr=PIPE,cwd=now_dir
     p = Popen(cmd, shell=True)
     # 煞笔gr, popen read都非得全跑完了再一次性读取, 不用gr就正常读一句输出一句;只能额外弄出一个文本流定时读
@@ -273,6 +274,7 @@ def extract_f0_feature(gpus, n_p, f0method, if_f0, exp_dir, version19, gpus_rmvp
                 )
             )
             logger.info("Execute: " + cmd)
+            print("Execute: " + cmd)
             p = Popen(
                 cmd, shell=True, cwd=now_dir
             )  # , stdin=PIPE, stdout=PIPE,stderr=PIPE
@@ -304,6 +306,7 @@ def extract_f0_feature(gpus, n_p, f0method, if_f0, exp_dir, version19, gpus_rmvp
                         )
                     )
                     logger.info("Execute: " + cmd)
+                    print("Execute: " + cmd)
                     p = Popen(
                         cmd, shell=True, cwd=now_dir
                     )  # , shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE, cwd=now_dir
@@ -327,6 +330,7 @@ def extract_f0_feature(gpus, n_p, f0method, if_f0, exp_dir, version19, gpus_rmvp
                     )
                 )
                 logger.info("Execute: " + cmd)
+                print("Execute: " + cmd)
                 p = Popen(
                     cmd, shell=True, cwd=now_dir
                 )  # , shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE, cwd=now_dir
@@ -370,6 +374,7 @@ def extract_f0_feature(gpus, n_p, f0method, if_f0, exp_dir, version19, gpus_rmvp
             )
         )
         logger.info("Execute: " + cmd)
+        print("Execute: " + cmd)
         p = Popen(
             cmd, shell=True, cwd=now_dir
         )  # , shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE, cwd=now_dir
@@ -607,6 +612,7 @@ def click_train(
             )
         )
     logger.info("Execute: " + cmd)
+    print("Execute: " + cmd)
     p = Popen(cmd, shell=True, cwd=now_dir)
     p.wait()
     return "训练结束, 您可查看控制台训练日志或实验文件夹下的train.log"
@@ -623,9 +629,11 @@ def train_index(exp_dir1, version19):
         else "%s/3_feature768" % (exp_dir)
     )
     if not os.path.exists(feature_dir):
+        print("请先进行特征提取! 1")
         return "请先进行特征提取!"
     listdir_res = list(os.listdir(feature_dir))
     if len(listdir_res) == 0:
+        print("请先进行特征提取! 2")
         return "请先进行特征提取！"
     infos = []
     npys = []
@@ -638,7 +646,7 @@ def train_index(exp_dir1, version19):
     big_npy = big_npy[big_npy_idx]
     if big_npy.shape[0] > 2e5:
         infos.append("Trying doing kmeans %s shape to 10k centers." % big_npy.shape[0])
-        yield "\n".join(infos)
+        #yield "\n".join(infos)
         try:
             big_npy = (
                 MiniBatchKMeans(
@@ -655,16 +663,16 @@ def train_index(exp_dir1, version19):
             info = traceback.format_exc()
             logger.info(info)
             infos.append(info)
-            yield "\n".join(infos)
+            #yield "\n".join(infos)
 
     np.save("%s/total_fea.npy" % exp_dir, big_npy)
     n_ivf = min(int(16 * np.sqrt(big_npy.shape[0])), big_npy.shape[0] // 39)
     infos.append("%s,%s" % (big_npy.shape, n_ivf))
-    yield "\n".join(infos)
+    #yield "\n".join(infos)
     index = faiss.index_factory(256 if version19 == "v1" else 768, "IVF%s,Flat" % n_ivf)
     # index = faiss.index_factory(256if version19=="v1"else 768, "IVF%s,PQ128x4fs,RFlat"%n_ivf)
     infos.append("training")
-    yield "\n".join(infos)
+    #yield "\n".join(infos)
     index_ivf = faiss.extract_index_ivf(index)  #
     index_ivf.nprobe = 1
     index.train(big_npy)
@@ -673,8 +681,10 @@ def train_index(exp_dir1, version19):
         "%s/trained_IVF%s_Flat_nprobe_%s_%s_%s.index"
         % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19),
     )
+    print("%s/trained_IVF%s_Flat_nprobe_%s_%s_%s.index"
+        % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19))
     infos.append("adding")
-    yield "\n".join(infos)
+    #yield "\n".join(infos)
     batch_size_add = 8192
     for i in range(0, big_npy.shape[0], batch_size_add):
         index.add(big_npy[i : i + batch_size_add])
@@ -683,6 +693,8 @@ def train_index(exp_dir1, version19):
         "%s/added_IVF%s_Flat_nprobe_%s_%s_%s.index"
         % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19),
     )
+    print("%s/added_IVF%s_Flat_nprobe_%s_%s_%s.index"
+        % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19))
     infos.append(
         "成功构建索引 added_IVF%s_Flat_nprobe_%s_%s_%s.index"
         % (n_ivf, index_ivf.nprobe, exp_dir1, version19)
