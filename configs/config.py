@@ -79,18 +79,20 @@ class Config:
         parser = argparse.ArgumentParser()
         parser.add_argument("--port", type=int, default=7865, help="Listen port")
         parser.add_argument("--pycmd", type=str, default=exe, help="Python command")
-        parser.add_argument("--colab", action="store_true", help="Launch in colab")
+        parser.add_argument("--colab", action="store_true", default=False, help="Launch in colab")
         parser.add_argument(
-            "--noparallel", action="store_true", help="Disable parallel processing"
+            "--noparallel", action="store_true", default=False, help="Disable parallel processing"
         )
         parser.add_argument(
             "--noautoopen",
             action="store_true",
+            default=False,
             help="Do not open in browser automatically",
         )
         parser.add_argument(
             "--dml",
             action="store_true",
+            default=False,
             help="torch_dml",
         )
         cmd_opts = parser.parse_args()
